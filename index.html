@@ -3,351 +3,568 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Crowd Choice Battle</title>
-<link rel="icon" href="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQUI0c0zefydxcFxRffYh0e9NLbfMnzI8EtzA&s" sizes="16×16" type="image/png" /> 
+<title>BLOCKS NEON</title>
+<link rel="icon" href="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcS8jV8y88XxNVwFE6Pq0IUOI_gsefgZbos3YA&s" sizes="16×16" type="image/png" /> 
 <style>
-body{margin:0;overflow:hidden;font-family:Arial;}
-canvas{display:block;}
-#ui{
- position:absolute;
- top:10px;
- left:50%;
- transform:translateX(-50%);
- color:white;
- font-weight:bold;
- text-align:center;
- text-shadow:0 0 5px black;
+:root{ --neon:#00f7ff; }
+
+body{
+margin:0;
+background:radial-gradient(circle at center,#0a0f1c,#000);
+font-family:Arial;
+display:flex;
+flex-direction:column;
+align-items:center;
+overflow:hidden;
+user-select: none;
+  -webkit-user-select: none;
 }
-#retryBtn{
- position:absolute;
- top:55%;
- left:50%;
- transform:translate(-50%,-50%);
- padding:12px 24px;
- font-size:20px;
- display:none;
+
+h1{
+margin:10px;
+color:var(--neon);
+text-shadow:0 0 20px var(--neon);
+}
+
+#wrap{ display:flex; gap:20px; position:relative; }
+
+canvas{
+background:#000;
+border-radius:12px;
+box-shadow:0 0 40px var(--neon);
+}
+
+.panel{
+background:rgba(255,255,255,0.05);
+backdrop-filter:blur(10px);
+padding:15px;
+border-radius:16px;
+text-align:center;
+min-width:150px;
+color:white;
 }
 </style>
 </head>
 <body>
 
-<div id="ui"></div>
-<button id="retryBtn">リトライ</button>
-<canvas id="game"></canvas>
+<h1>BLOCKS NEON</h1>
+
+<div id="wrap">
+<canvas id="game" width="300" height="600"></canvas>
+
+<div class="panel">
+<div>Score</div><div id="score">0</div>
+<div>Lines</div><div id="lines">0</div>
+<div>Combo</div><div id="combo">0</div>
+
+<div style="margin-top:15px;">HOLD</div>
+<canvas id="hold" width="120" height="120"></canvas>
+
+<div style="margin-top:15px;">NEXT</div>
+<canvas id="next" width="120" height="120"></canvas>
+</div>
+</div>
 
 <script>
+const COLS=10,ROWS=20,SIZE=30;
 const canvas=document.getElementById("game");
 const ctx=canvas.getContext("2d");
+const nextCanvas=document.getElementById("next");
+const nextCtx=nextCanvas.getContext("2d");
+const holdCanvas=document.getElementById("hold");
+const holdCtx=holdCanvas.getContext("2d");
 
-function resize(){
- canvas.width=innerWidth;
- canvas.height=innerHeight;
-}
-resize();
-addEventListener("resize",resize);
+let board,current,next,hold=null;
+let x,y;
+let score=0, combo=0, linesCleared=0; // level削除
+let dropInterval=800,dropCounter=0,lastTime=0;
+let holdUsed=false,lastMoveRotate=false;
+let particles=[],shockwaves=[],lasers=[];
+let effectTimer=0,effectText="";
+let gameOver=false,paused=false;
+//let lockDelay=500,lockTimer=0;
+let backToBack=false;
 
-/* ===== 永続データ ===== */
-let save=JSON.parse(localStorage.getItem("crowdSaveCloud"))||{
- startLv:0
+const pieces={
+I:[[1,1,1,1]],
+O:[[1,1],[1,1]],
+T:[[0,1,0],[1,1,1]],
+L:[[0,0,1],[1,1,1]],
+J:[[1,0,0],[1,1,1]],
+S:[[0,1,1],[1,1,0]],
+Z:[[1,1,0],[0,1,1]]
 };
-function saveData(){
- localStorage.setItem("crowdSaveCloud",JSON.stringify(save));
-}
-function getBaseCrowd(){return 10+save.startLv*5;}
 
-/* ===== ゲーム変数 ===== */
-let crowd=getBaseCrowd();
-let level=1;
-let combo=0;
-let panelCount=0;
-let state="panel";
-let frame=0;
-let fightTimer=0;
+const colors={
+I:"#00f7ff",O:"#ffe600",T:"#c400ff",
+L:"#ff8800",J:"#0066ff",S:"#00ff88",Z:"#ff0044"
+};
 
-let panelTimer=0;
-let panelLimit=240;
-let panelY=0;
+function init(){
+board=Array.from({length:ROWS},()=>Array(COLS).fill(0));
+score=0;level=1;combo=0;
+dropInterval=800;
 
-let currentPanels=[];
-let currentEnemy=null;
-let effects=[];
-let flash=0;
+hold = null;      // ← 追加
+holdUsed = false; // ← 追加
 
-/* ===== 雲データ ===== */
-let cloudsFar=[];
-let cloudsNear=[];
-
-function createCloud(y,scale){
- return{
-  x:Math.random()*canvas.width,
-  y:y,
-  size:80*scale+Math.random()*40,
-  speed:0.3*scale+Math.random()*0.3
- };
+next=randomPiece();
+resetPiece();
+updateUI();
 }
 
-for(let i=0;i<8;i++){
- cloudsFar.push(createCloud(Math.random()*canvas.height,0.8));
+function randomPiece(){
+const keys=Object.keys(pieces);
+const name=keys[Math.floor(Math.random()*keys.length)];
+return {name,shape:pieces[name].map(r=>[...r])};
 }
-for(let i=0;i<6;i++){
- cloudsNear.push(createCloud(Math.random()*canvas.height,1.4));
+
+function resetPiece(){
+current=next;
+next=randomPiece();
+x=3;y=0;
+holdUsed=false;
+lockTimer=0;
+if(collision()) gameOver=true;
 }
 
-/* ===== 背景描画 ===== */
-function drawBackground(){
+function collision(tx=x,ty=y,shape=current.shape){
+return shape.some((r,ry)=>
+r.some((v,cx)=>{
+if(!v) return false;
+let nx=tx+cx,ny=ty+ry;
+return nx<0||nx>=COLS||ny>=ROWS||board[ny]?.[nx];
+}));
+}
 
- let grad=ctx.createLinearGradient(0,0,0,canvas.height);
- grad.addColorStop(0,"#6ec6ff");
- grad.addColorStop(1,"#c9f0ff");
- ctx.fillStyle=grad;
- ctx.fillRect(0,0,canvas.width,canvas.height);
+function merge(){
+current.shape.forEach((r,ry)=>
+r.forEach((v,cx)=>{
+if(v) board[y+ry][x+cx]=colors[current.name];
+}));
+}
 
- function drawCloud(c,alpha){
-  ctx.globalAlpha=alpha;
-  ctx.fillStyle="white";
-  ctx.beginPath();
-  ctx.arc(c.x,c.y,c.size*0.6,0,Math.PI*2);
-  ctx.arc(c.x+c.size*0.6,c.y+10,c.size*0.5,0,Math.PI*2);
-  ctx.arc(c.x-c.size*0.6,c.y+10,c.size*0.5,0,Math.PI*2);
-  ctx.fill();
-  ctx.globalAlpha=1;
- }
+function spawnExplosion(cx,cy,color){
+for(let i=0;i<15;i++){
+particles.push({
+x:cx*SIZE+SIZE/2,
+y:cy*SIZE+SIZE/2,
+vx:(Math.random()-0.5)*8,
+vy:(Math.random()-0.5)*8,
+life:40,
+color
+});
+}
+}
 
- cloudsFar.forEach(c=>{
-  c.y+=c.speed+level*0.05;
-  if(c.y>canvas.height+100){
-   c.y=-100;
-   c.x=Math.random()*canvas.width;
+function spawnShockwave(){
+shockwaves.push({radius:0,alpha:1});
+}
+
+function spawnTetrisLaser(){
+for(let i=0;i<COLS;i++){
+lasers.push({x:i*SIZE+SIZE/2,alpha:1});
+}
+}
+
+function clearLines(){
+    let lines=0;
+    let cleared=[];
+
+    for(let r=ROWS-1;r>=0;r--){
+        if(board[r].every(v=>v)){
+            cleared.push(r);
+            board.splice(r,1);
+            board.unshift(Array(COLS).fill(0));
+            lines++;
+            r++;
+        }
+    }
+
+    let tspin=false;
+    if(current.name==="T" && lastMoveRotate){
+        let corners=0;
+        const cx=x+1,cy=y+1;
+        [[cx-1,cy-1],[cx+1,cy-1],[cx-1,cy+1],[cx+1,cy+1]].forEach(([px,py])=>{
+            if(px<0||px>=COLS||py>=ROWS||board[py]?.[px]) corners++;
+        });
+        if(corners>=3) tspin=true;
+    }
+
+    let special=tspin||lines===4;
+
+    if(lines>0){
+        cleared.forEach(r=>{
+            for(let c=0;c<COLS;c++){
+                spawnExplosion(c,r,"#00f7ff");
+            }
+        });
+
+        spawnShockwave();
+        combo++;
+
+        if(special){
+            if(backToBack) score+=1200;
+            else score+=800;
+            backToBack=true;
+
+            if(tspin) effectText="T-SPIN!";
+            if(lines===4){ effectText="TETRIS!!!"; spawnTetrisLaser(); }
+
+            effectTimer=40;
+        }else{
+            score+=lines*100;
+            backToBack=false;
+        }
+
+        score+=combo*50;
+
+        linesCleared += lines; // ←累計ライン数を加算
+
+    }else{
+        combo=0;
+        backToBack=false;
+    }
+
+    updateUI();
+    lastMoveRotate=false;
+}
+
+function updateUI(){
+    scoreEl.textContent = score;
+    comboEl.textContent = combo;
+    linesEl.textContent = linesCleared; // レベル表示をライン数に
+}
+
+const scoreEl=document.getElementById("score");
+const linesEl=document.getElementById("lines"); // 追加
+const comboEl=document.getElementById("combo");
+
+function move(d){
+x+=d;
+if(collision()) x-=d;
+}
+
+function softDrop(){
+if(paused||gameOver) return;
+
+y++;
+
+if(collision()){
+y--;
+merge();
+clearLines();
+resetPiece();
+}
+}
+
+function hardDrop(){
+if(paused||gameOver) return;
+while(!collision()) y++;
+y--;
+merge();
+clearLines();
+resetPiece();
+}
+
+function rotateCW(){
+  const old = current.shape;
+
+  // 回転
+  const rotated = old[0].map((_, i) =>
+    old.map(r => r[i]).reverse()
+  );
+  current.shape = rotated;
+
+  // キック候補
+  const kicks = [
+    {x:0, y:0},
+    {x:1, y:0},
+    {x:-1, y:0},
+    {x:0, y:-1}
+  ];
+
+  for(const k of kicks){
+    x += k.x;
+    y += k.y;
+
+    if(!collision()){
+      lastMoveRotate = true;
+      return;
+    }
+
+    x -= k.x;
+    y -= k.y;
   }
-  drawCloud(c,0.5);
- });
 
- cloudsNear.forEach(c=>{
-  c.y+=c.speed+level*0.1;
-  if(c.y>canvas.height+150){
-   c.y=-150;
-   c.x=Math.random()*canvas.width;
-  }
-  drawCloud(c,0.9);
- });
+  // 全部失敗したら元に戻す
+  current.shape = old;
 }
 
-/* ===== パネル生成 ===== */
-function newSet(){
- let types=["+5","-3","×2","÷2"];
- if(level>=5) types.push("+10");
- if(level>=8) types.push("×3");
- if(level>=12) types.push("-10");
+function rotateCCW(){
+  const old = current.shape;
 
- currentPanels=[
-  {x:canvas.width*0.3,type:types[Math.floor(Math.random()*types.length)]},
-  {x:canvas.width*0.7,type:types[Math.floor(Math.random()*types.length)]}
- ];
+  // 反時計回り回転
+  const rotated = old[0].map((_, i) =>
+    old.map(r => r[r.length - 1 - i])
+  );
+  current.shape = rotated;
 
- panelTimer=panelLimit - level*5;
- panelY=-80;
- state="panel";
-}
+  // キック候補
+  const kicks = [
+    {x:0, y:0},
+    {x:1, y:0},
+    {x:-1, y:0},
+    {x:0, y:-1}
+  ];
 
-function spawnEnemy(){
- currentEnemy={
-  power:Math.floor(Math.random()*20)+10+level*6
- };
- state="enemy";
-}
+  for(const k of kicks){
+    x += k.x;
+    y += k.y;
 
-newSet();
+    if(!collision()){
+      lastMoveRotate = true;
+      return;
+    }
 
-/* ===== パネル処理 ===== */
-function applyPanel(type){
- if(type==="+5") crowd+=5;
- if(type==="-3") crowd=Math.max(0,crowd-3);
- if(type==="×2") crowd*=2;
- if(type==="÷2") crowd=Math.floor(crowd/2);
- if(type==="+10") crowd+=10;
- if(type==="×3") crowd*=3;
- if(type==="-10") crowd=Math.max(0,crowd-10);
-}
-
-function choosePanel(choiceX){
- let chosen=currentPanels.reduce((a,b)=>
-  Math.abs(b.x-choiceX)<Math.abs(a.x-choiceX)?b:a
- );
- applyPanel(chosen.type);
-
- panelCount++;
-
- if(panelCount>=3){
-  panelCount=0;
-  spawnEnemy();
- }else{
-  newSet();
- }
-}
-
-/* ===== 戦闘 ===== */
-function fight(){
- fightTimer--;
- if(fightTimer>0) return;
-
- if(crowd>currentEnemy.power){
-  crowd-=currentEnemy.power;
-  combo++;
-  level++;
-  flash=10;
-
-  effects.push({
-   x:canvas.width/2,
-   y:150,
-   r:10,
-   life:30
-  });
-
-  newSet();
- }else{
-  state="over";
-  combo=0;
-
-  if(level>save.startLv){
-   save.startLv=level;
-   saveData();
+    x -= k.x;
+    y -= k.y;
   }
 
-  document.getElementById("retryBtn").style.display="block";
- }
+  // 全部失敗したら元に戻す
+  current.shape = old;
 }
+function rotate180(){
+  const old = current.shape;
 
-/* ===== 群衆描画 ===== */
-function drawPerson(x,y,size){
- const leg=Math.sin(frame*0.3)*4;
- ctx.fillStyle="#0077ff";
- ctx.fillRect(x,y,size,size);
- ctx.fillRect(x,y+size,size/3,size/2+leg);
- ctx.fillRect(x+size*0.7,y+size,size/3,size/2-leg);
-}
+  // 180度回転
+  const rotated = old
+    .slice()
+    .reverse()
+    .map(row => row.slice().reverse());
 
-function drawCrowd(){
- const playerY=canvas.height-120;
- const rows=Math.ceil(Math.sqrt(crowd));
- const size=10;
- let count=0;
+  current.shape = rotated;
 
- for(let y=0;y<rows;y++){
-  for(let x=0;x<rows;x++){
-   if(count>=crowd)return;
-   drawPerson(
-    canvas.width/2+(x-rows/2)*size*1.8,
-    playerY+(y-rows/2)*size*1.8,
-    size
-   );
-   count++;
+  const kicks = [
+    {x:0, y:0},
+    {x:1, y:0},
+    {x:-1, y:0},
+    {x:2, y:0},
+    {x:-2, y:0},
+    {x:0, y:-1}
+  ];
+
+  for(const k of kicks){
+    x += k.x;
+    y += k.y;
+
+    if(!collision()){
+      lastMoveRotate = true;
+      return;
+    }
+
+    x -= k.x;
+    y -= k.y;
   }
- }
+
+  // 失敗したら戻す
+  current.shape = old;
 }
 
-/* ===== メイン描画 ===== */
+
+function holdPiece(){
+if(holdUsed) return;
+holdUsed=true;
+if(!hold){ hold=current; resetPiece(); }
+else{
+[current,hold]=[hold,current];
+x=3;y=0;
+}
+}
+
+function drawCell(cx,cy,color,ghost=false){
+const px=cx*SIZE,py=cy*SIZE;
+
+ctx.save();
+
+// ゴースト透明
+ctx.globalAlpha = ghost ? 0.25 : 1;
+
+// ネオン発光
+ctx.shadowColor = color;
+ctx.shadowBlur = 25;
+ctx.fillStyle = color;
+ctx.fillRect(px,py,SIZE,SIZE);
+
+// 内側白枠
+ctx.shadowBlur = 0;
+ctx.lineWidth = 2;
+ctx.strokeStyle = "white";
+ctx.strokeRect(px+3,py+3,SIZE-6,SIZE-6);
+
+ctx.restore();
+}
 function draw(){
- drawBackground();
- frame++;
+ctx.clearRect(0,0,canvas.width,canvas.height);
 
- if(flash>0){
-  ctx.fillStyle="rgba(255,255,255,0.2)";
-  ctx.fillRect(0,0,canvas.width,canvas.height);
-  flash--;
- }
+board.forEach((row,ry)=>
+row.forEach((val,cx)=>{ if(val) drawCell(cx,ry,val); })
+);
 
- drawCrowd();
+let gy=y;
+while(!collision(x,gy+1)) gy++;
 
- if(state==="panel"){
+current.shape.forEach((r,ry)=>
+r.forEach((v,cx)=>{
+if(v) drawCell(x+cx,gy+ry,colors[current.name],true);
+})
+);
 
-  panelTimer--;
-  panelY+=3+level*0.3;
+current.shape.forEach((r,ry)=>
+r.forEach((v,cx)=>{
+if(v) drawCell(x+cx,y+ry,colors[current.name]);
+})
+);
 
-  currentPanels.forEach(p=>{
-   ctx.fillStyle="#0044aa";
-   ctx.fillRect(p.x-90,panelY,180,70);
-   ctx.fillStyle="white";
-   ctx.textAlign="center";
-   ctx.font="26px Arial";
-   ctx.fillText(p.type,p.x,panelY+45);
-  });
+particles.forEach((p,i)=>{
+ctx.save();
+ctx.globalAlpha=p.life/40;
+ctx.shadowColor=p.color;
+ctx.shadowBlur=20;
+ctx.fillStyle=p.color;
+ctx.beginPath();
+ctx.arc(p.x,p.y,4,0,Math.PI*2);
+ctx.fill();
+ctx.restore();
+p.x+=p.vx;p.y+=p.vy;p.vy+=0.2;p.life--;
+if(p.life<=0) particles.splice(i,1);
+});
 
-  ctx.fillStyle="gray";
-  ctx.fillRect(50,50,canvas.width-100,15);
-  ctx.fillStyle="lime";
-  ctx.fillRect(50,50,(canvas.width-100)*(panelTimer/panelLimit),15);
+shockwaves.forEach((s,i)=>{
+ctx.save();
+ctx.globalAlpha=s.alpha;
+ctx.strokeStyle="#00f7ff";
+ctx.lineWidth=8;
+ctx.shadowBlur=30;
+ctx.shadowColor="#00f7ff";
+ctx.beginPath();
+ctx.arc(canvas.width/2,canvas.height/2,s.radius,0,Math.PI*2);
+ctx.stroke();
+ctx.restore();
+s.radius+=15;s.alpha-=0.03;
+if(s.alpha<=0) shockwaves.splice(i,1);
+});
 
-  if(panelTimer<=0 || panelY>canvas.height-200){
-   let random=currentPanels[Math.floor(Math.random()*2)];
-   applyPanel(random.type);
-   panelCount++;
+lasers.forEach((l,i)=>{
+ctx.save();
+ctx.globalAlpha=l.alpha;
+ctx.strokeStyle="#00f7ff";
+ctx.lineWidth=4;
+ctx.shadowBlur=25;
+ctx.shadowColor="#00f7ff";
+ctx.beginPath();
+ctx.moveTo(l.x,0);
+ctx.lineTo(l.x,canvas.height);
+ctx.stroke();
+ctx.restore();
+l.alpha-=0.05;
+if(l.alpha<=0) lasers.splice(i,1);
+});
 
-   if(panelCount>=3){
-    panelCount=0;
-    spawnEnemy();
-   }else{
-    newSet();
-   }
-  }
-
-  ctx.fillStyle="white";
-  ctx.fillText(`パネル ${panelCount+1}/3`,canvas.width/2,100);
- }
-
- if(state==="enemy"){
-  ctx.fillStyle="red";
-  ctx.beginPath();
-  ctx.arc(canvas.width/2,150,60+level*2,0,Math.PI*2);
-  ctx.fill();
-
-  ctx.fillStyle="white";
-  ctx.font="26px Arial";
-  ctx.fillText("敵出現！タップで戦闘",canvas.width/2,90);
-  ctx.fillText(currentEnemy.power,canvas.width/2,160);
- }
-
- if(state==="fight") fight();
-
- if(state==="over"){
-  ctx.fillStyle="black";
-  ctx.font="42px Arial";
-  ctx.textAlign="center";
-  ctx.fillText("GAME OVER",canvas.width/2,canvas.height/2-40);
- }
-
- document.getElementById("ui").textContent=
-  `人数:${crowd} | Lv:${level} | Combo:${combo} | 強化:${save.startLv}`;
+if(effectTimer>0){
+ctx.fillStyle="rgba(0,255,255,"+(effectTimer/40)+")";
+ctx.fillRect(0,0,canvas.width,canvas.height);
+ctx.fillStyle="#00f7ff";
+ctx.font="bold 50px Arial";
+ctx.textAlign="center";
+ctx.fillText(effectText,canvas.width/2,canvas.height/2);
+effectTimer--;
 }
 
-function loop(){draw();requestAnimationFrame(loop);}
-loop();
+if(paused){
+ctx.fillStyle="rgba(0,0,0,0.7)";
+ctx.fillRect(0,0,canvas.width,canvas.height);
+ctx.fillStyle="#00f7ff";
+ctx.font="bold 40px Arial";
+ctx.textAlign="center";
+ctx.fillText("PAUSED",canvas.width/2,canvas.height/2);
+}
 
-/* ===== 入力 ===== */
-addEventListener("mousedown",e=>{
- if(state==="panel") choosePanel(e.clientX);
- else if(state==="enemy"){
-  state="fight";
-  fightTimer=60;
- }
+if(gameOver){
+ctx.fillStyle="rgba(0,0,0,0.8)";
+ctx.fillRect(0,0,canvas.width,canvas.height);
+ctx.fillStyle="#ff0044";
+ctx.font="bold 40px Arial";
+ctx.textAlign="center";
+ctx.fillText("GAME OVER",canvas.width/2,canvas.height/2-20);
+ctx.font="20px Arial";
+ctx.fillText("Press R to Restart",canvas.width/2,canvas.height/2+20);
+}
+
+drawMini(nextCtx,next);
+drawMini(holdCtx,hold);
+}
+
+function drawMini(ctx,piece){
+ctx.clearRect(0,0,120,120);
+if(!piece) return;
+
+piece.shape.forEach((r,ry)=>{
+r.forEach((v,cx)=>{
+if(v){
+
+const px=cx*25+30;
+const py=ry*25+30;
+
+// ネオン発光
+ctx.save();
+ctx.shadowColor = colors[piece.name];
+ctx.shadowBlur = 20;
+ctx.fillStyle = colors[piece.name];
+ctx.fillRect(px,py,25,25);
+
+// 白枠
+ctx.shadowBlur = 0;
+ctx.lineWidth = 2;
+ctx.strokeStyle = "white";
+ctx.strokeRect(px+3,py+3,19,19);
+
+ctx.restore();
+
+}
+});
+});
+}
+document.addEventListener("keydown",e=>{
+if(e.key==="ArrowLeft") move(-1);
+if(e.key==="ArrowRight") move(1);
+if(e.key==="ArrowDown") softDrop();
+if(e.key===" ") hardDrop();
+if(e.key==="ArrowUp") rotateCW();
+if(e.key==="d"||e.key==="D") rotateCW();
+if(e.key==="a"||e.key==="A") rotateCCW();
+if(e.key==="s"||e.key==="S") rotate180();
+if(e.key==="c"||e.key==="C") holdPiece();
+if(e.key==="p"||e.key==="P") paused=!paused;
+if(e.key==="r"||e.key==="R") /*init();*/location.reload();
 });
 
-addEventListener("touchstart",e=>{
- if(state==="panel") choosePanel(e.touches[0].clientX);
- else if(state==="enemy"){
-  state="fight";
-  fightTimer=60;
- }
-});
+function update(time=0){
+const delta=time-lastTime;
+lastTime=time;
+if(!paused&&!gameOver){
+dropCounter+=delta;
+if(dropCounter>dropInterval){
+softDrop();
+dropCounter=0;
+}
+}
+draw();
+requestAnimationFrame(update);
+}
 
-document.getElementById("retryBtn").onclick=()=>{
- crowd=getBaseCrowd();
- level=1;
- combo=0;
- panelCount=0;
- state="panel";
- document.getElementById("retryBtn").style.display="none";
- newSet();
-};
+init();
+update();
 </script>
 </body>
 </html>
